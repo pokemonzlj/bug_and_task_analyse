@@ -15,7 +15,7 @@ class bug_analyse():
     def __init__(self):
         self.bug_info = {'created_bug_count': 0, 'resolved_bug_count': 0, 'online_bug_count': 0, 'offline_bug_count': 0,
                          'rejected_bug_count': 0, 'severity_count': {}, 'resolution_method_count': {}}  # 用于bug维度存储数据
-        self.bug_on_person = {}  # 用户存储个人维度的bug数据，内部结构{'name':{'resolve_bug':10, 'report_bug':0, 'response_bug':0, 'reject_bug':0, 'refuse_bug':0, 'resolve_time':[1,2,3]}, }
+        self.bug_on_person = {}  # 用户存储个人维度的bug数据
         self.bug_rejected_list = []
 
     def read_xls_as_dict(self, file_paths=[]):
@@ -228,14 +228,27 @@ class bug_analyse():
                         if 'response_bug' not in self.bug_on_person[responser]:
                             self.bug_on_person[responser]['response_bug'] = 0
                         self.bug_on_person[responser]['response_bug'] += 1
-                if test_responser:
+                # 记录线上测试责任及严重程度细分
+                if test_responser and onoroff == '线上':
                     if test_responser not in self.bug_on_person:
                         self.bug_on_person[test_responser] = {}
-                        self.bug_on_person[test_responser]['test_response_bug'] = 1
-                    else:
-                        if 'test_response_bug' not in self.bug_on_person[test_responser]:
-                            self.bug_on_person[test_responser]['test_response_bug'] = 0
-                        self.bug_on_person[test_responser]['test_response_bug'] += 1
+                    if 'online_bug_response' not in self.bug_on_person[test_responser]:
+                        self.bug_on_person[test_responser]['online_bug_response'] = {}
+                    if level not in self.bug_on_person[test_responser]['online_bug_response']:
+                        self.bug_on_person[test_responser]['online_bug_response'][level] = 0
+                    self.bug_on_person[test_responser]['online_bug_response'][level] += 1
+
+                # 记录线上/线下及严重程度细分
+                onoroff = bug['线上/线下']
+                category = 'online_bug' if onoroff == '线上' else 'offline_bug'
+                if responser:
+                    if responser not in self.bug_on_person:
+                        self.bug_on_person[responser] = {}
+                    if category not in self.bug_on_person[responser]:
+                        self.bug_on_person[responser][category] = {}
+                    if level not in self.bug_on_person[responser][category]:
+                        self.bug_on_person[responser][category][level] = 0
+                    self.bug_on_person[responser][category][level] += 1
         print("BUG按解决人统计，不算建议等级，其中:")
         for res in self.bug_on_person:
             if 'resolve_bug' in self.bug_on_person[res]:
@@ -248,10 +261,19 @@ class bug_analyse():
                                                       "{:.1f}%".format(
                                                           self.bug_on_person[res]['response_bug'] /
                                                           self.bug_info['resolved_bug_count'] * 100)))
+                if 'online_bug' in self.bug_on_person[res]:
+                    for level in self.bug_on_person[res]['online_bug']:
+                        print("其中线上{}:{}个".format(level, self.bug_on_person[res]['online_bug'][level]))
+                if 'offline_bug' in self.bug_on_person[res]:
+                    for level in self.bug_on_person[res]['offline_bug']:
+                        print("其中线下{}:{}个".format(level, self.bug_on_person[res]['offline_bug'][level]))
         print("BUG按测试责任人统计，其中:")
         for res in self.bug_on_person:
-            if 'test_response_bug' in self.bug_on_person[res]:
-                print("{}测试责任{}个；".format(res, self.bug_on_person[res]['test_response_bug']))
+            if 'online_bug_response' in self.bug_on_person[res]:
+                online_test_total = sum(self.bug_on_person[res]['online_bug_response'].values())
+                print("{}线上bug测试责任{}个；".format(res, online_test_total))
+                for level in self.bug_on_person[res]['online_bug_response']:
+                    print("其中线上{}:{}个".format(level, self.bug_on_person[res]['online_bug_response'][level]))
         print("************************************************************")
 
     def bug_deal_time_analyse(self, buglist=[]):
@@ -345,6 +367,13 @@ class bug_analyse():
                 else:
                     bugresponsible = bug['处理人']
                 print("{} {} {} {} {}".format(bugid, bugtitle, bugresponsible, buglevel, bugreopentime))
+                
+                # 记录个人激活次数
+                if bugresponsible not in self.bug_on_person:
+                    self.bug_on_person[bugresponsible] = {}
+                if 'reopen_count' not in self.bug_on_person[bugresponsible]:
+                    self.bug_on_person[bugresponsible]['reopen_count'] = 0
+                self.bug_on_person[bugresponsible]['reopen_count'] += int(bugreopentime)
         print("************************************************************")
 
     def bug_reason_analyse(self, buglist=[]):
@@ -393,6 +422,65 @@ class bug_analyse():
         self.bug_deal_time_analyse(resolve_buglist)
         # self.bug_reopen_analyse(resolve_buglist)
         self.bug_reason_analyse(resolve_buglist)
+        self.export_person_data()
+
+    def export_person_data(self):
+        """将人员统计数据导出到Excel"""
+        wb = openpyxl.Workbook()
+        sheet = wb.active
+        sheet.title = "人员统计"
+        
+        headers = ["姓名", "报告Bug数", "解决Bug数", "拒绝Bug数", "线上责任Bug数", 
+                   "线上-致命", "线上-严重", "线上-一般", "线上-轻微",
+                   "线下责任Bug数", 
+                   "线下-致命", "线下-严重", "线下-一般", "线下-轻微",
+                   "线上测试责任Bug数", 
+                   "本次测试-致命", "本次测试-严重", "本次测试-一般", "本次测试-轻微",
+                   "平均修复时间(天)", 
+                   "修复总工时(小时)", "帮助修复工时(小时)", "激活次数"]
+        sheet.append(headers)
+        
+        target_levels = ["致命", "严重", "一般", "轻微"]
+        
+        for name, data in self.bug_on_person.items():
+            report_bug = data.get('report_bug', 0)
+            resolve_bug = data.get('resolve_bug', 0)
+            reject_bug = data.get('reject_bug', 0)
+            
+            # 线上/线下 责任人 统计
+            online_data = data.get('online_bug', {})
+            offline_data = data.get('offline_bug', {})
+            
+            online_total = sum(online_data.values())
+            online_split = [online_data.get(lvl, 0) for lvl in target_levels]
+            
+            offline_total = sum(offline_data.values())
+            offline_split = [offline_data.get(lvl, 0) for lvl in target_levels]
+
+            # 线上 测试责任人 统计
+            online_test_data = data.get('online_bug_response', {})
+            online_test_total = sum(online_test_data.values())
+            online_test_split = [online_test_data.get(lvl, 0) for lvl in target_levels]
+            
+            # 时间统计
+            avg_resolve_time = 0
+            if 'resolve_time' in data and data['resolve_time']:
+                avg_resolve_time = sum(data['resolve_time']) / len(data['resolve_time'])
+            
+            total_work_time = data.get('resolve_total_time', 0)
+            help_work_time = data.get('help_resolve_time', 0)
+            reopen_count = data.get('reopen_count', 0)
+            
+            row = [name, report_bug, resolve_bug, reject_bug, online_total] + online_split + \
+                  [offline_total] + offline_split + \
+                  [online_test_total] + online_test_split + \
+                  [round(avg_resolve_time, 2), 
+                   total_work_time, help_work_time, reopen_count]
+            sheet.append(row)
+            
+        filename = "person_analyse.xlsx"
+        wb.save(filename)
+        print(f"人员分析数据已导出至 {filename}")
 
 
 if __name__ == "__main__":
